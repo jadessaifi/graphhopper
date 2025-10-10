@@ -119,6 +119,7 @@
             <artifactId>logback-classic</artifactId>
             <scope>test</scope>
         </dependency>
+
                     <!-- javafaker -->
         <dependency>
             <groupId>com.github.javafaker</groupId>
@@ -126,6 +127,7 @@
             <version>1.0.2</version>
             <scope>test</scope>
         </dependency>
+
     </dependencies>
 
     <build>
@@ -202,9 +204,7 @@
                 </dependencies>
             </plugin>
 
-
         </plugins>
-
         <!-- make version available at runtime via version file -->
         <resources>
             <resource>
