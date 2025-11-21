@@ -53,35 +53,40 @@ jobs:
 
       - name: Run PIT (mutation testing)
         working-directory: ${{ env.MODULE }}
+        shell: bash
         run: |
+          set -euo pipefail
           mvn -q org.pitest:pitest-maven:mutationCoverage \
             -DtargetClasses="${{ env.PIT_TARGET_CLASSES }}" \
-            -DtargetTests="${{ env.PIT_TARGET_TESTS }}"
+            -DtargetTests="${{ env.PIT_TARGET_TESTS }}" \
+            | tee pit.log
 
       - name: Extract current mutation score
         id: score_current
         shell: bash
         run: |
           set -euo pipefail
-          SUMMARY=$(find "${{ env.MODULE }}/target/pit-reports" -name "summary.xml" | head -n 1)
+          SUMMARY=$(find "${{ env.MODULE }}/target/pit-reports" -name "summary.xml" 2>/dev/null | head -n 1 || true)
 
-          if [[ -z "${SUMMARY}" ]]; then
-            echo "Impossible de trouver summary.xml dans ${{ env.MODULE }}/target/pit-reports" >&2
-            exit 1
+          if [[ -n "${SUMMARY}" ]]; then
+            CUR=$(grep -oPm1 '(?<=<mutationScore>)[0-9\.]+' "$SUMMARY" || true)
+            if [[ -z "${CUR}" ]]; then
+              CUR=$(grep -oPm1 '(?<=<score>)[0-9\.]+' "$SUMMARY" || true)
+            fi
           fi
 
-          CUR=$(grep -oPm1 '(?<=<mutationScore>)[0-9\.]+' "$SUMMARY" || true)
-          if [[ -z "${CUR}" ]]; then
-            CUR=$(grep -oPm1 '(?<=<score>)[0-9\.]+' "$SUMMARY" || true)
+          if [[ -z "${CUR:-}" ]]; then
+            LOG="${{ env.MODULE }}/pit.log"
+            CUR=$(grep -oE 'Killed [0-9]+ \([0-9]+%' "$LOG" | grep -oE '[0-9]+%' | tr -d '%' | tail -n1)
           fi
 
-          if [[ -z "${CUR}" ]]; then
-            echo "Score introuvable dans $SUMMARY" >&2
+          if [[ -z "${CUR:-}" ]]; then
+            echo "Score introuvable" >&2
             exit 1
           fi
 
           echo "current=${CUR}" >> "$GITHUB_OUTPUT"
-          echo "Score de mutation : ${CUR}"
+          echo "Score de mutation : ${CUR}%"
 
       - name: Read previous mutation score
         id: score_prev
@@ -98,21 +103,30 @@ jobs:
         run: |
           CUR="${{ steps.score_current.outputs.current }}"
           PREV="${{ steps.score_prev.outputs.prev }}"
-
           cmp=$(awk -v a="$CUR" -v b="$PREV" 'BEGIN { if (a < b) print "lt"; else print "ge" }')
           if [[ "$cmp" == "lt" ]]; then
-            echo "::error::Le score de mutation a diminué (${CUR} < ${PREV})."
+            echo "::error::Le score de mutation a diminué (${CUR}% < ${PREV}%)."
             exit 1
           fi
+          echo "OK : score stable ou en hausse."
 
-          echo "OK : score de mutation stable ou en hausse."
-
-      # HUMOUR : Rickroll si un test échoue
       - name: Rickroll on failure
         if: failure()
         run: |
           echo "Never gonna give you up"
           echo "Never gonna let you down"
-          echo "Voici ton Rickroll : https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          echo "Rickroll : https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
+      - name: Store current score
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "${{ env.PIT_CACHE_DIR }}"
+          echo "${{ steps.score_current.outputs.current }}" > "${{ env.PIT_SCORE_FILE }}"
 
+      - name: Save updated score cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.PIT_CACHE_DIR }}
+          key: ${{ env.PIT_CACHE_PREFIX }}${{ github.run_id }}
