@@ -110,7 +110,7 @@ jobs:
       # HUMOUR : Rickroll si un test échoue
       - name: Rickroll on failure
         if: failure()
-        run: 
+        run: |
           echo "Never gonna give you up"
           echo "Never gonna let you down"
           echo "Voici ton Rickroll : https://www.youtube.com/watch?v=dQw4w9WgXcQ"
