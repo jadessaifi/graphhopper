@@ -15,10 +15,8 @@ jobs:
       PIT_TARGET_CLASSES: com.graphhopper.coll.*
       PIT_TARGET_TESTS: com.graphhopper.coll.*
 
-      # Dossier qui contiendra le score “persisté” entre runs (via cache)
       PIT_CACHE_DIR: .pit-cache
       PIT_SCORE_FILE: .pit-cache/mutation_score.txt
-      # Préfixe de cache « rolling » : on restaure la dernière version grâce à restore-keys
       PIT_CACHE_PREFIX: pit-score-
 
     steps:
@@ -39,7 +37,6 @@ jobs:
           restore-keys: |
             maven-${{ runner.os }}-
 
-      # Récupère le score précédemment sauvegardé (si présent)
       - name: Restore previous PIT score
         uses: actions/cache@v4
         with:
@@ -51,7 +48,6 @@ jobs:
       - name: Build + unit tests
         run: mvn -B -q -DskipITs=true clean test
 
-      # (Optionnel) build des modules requis pour PIT
       - name: Install (skip tests)
         run: mvn -B -q -DskipTests install
 
@@ -67,49 +63,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # summary.xml se trouve dans MODULE/target/pit-reports/<timestamp>/summary.xml
-          SUMMARY=$(ls -1 ${{ env.MODULE }}/target/pit-reports/*/summary.xml | tail -n1)
+          SUMMARY=$(find "${{ env.MODULE }}/target/pit-reports" -name "summary.xml" | head -n 1)
+
           if [[ -z "${SUMMARY}" ]]; then
-            echo "Impossible de trouver summary.xml" >&2
+            echo "Impossible de trouver summary.xml dans ${{ env.MODULE }}/target/pit-reports" >&2
             exit 1
           fi
 
-          # PIT >= 1.15 expose <mutationScore> (pourcentage), fallback sur <score> si besoin
           CUR=$(grep -oPm1 '(?<=<mutationScore>)[0-9\.]+' "$SUMMARY" || true)
           if [[ -z "${CUR}" ]]; then
             CUR=$(grep -oPm1 '(?<=<score>)[0-9\.]+' "$SUMMARY" || true)
           fi
+
           if [[ -z "${CUR}" ]]; then
             echo "Score introuvable dans $SUMMARY" >&2
             exit 1
           fi
 
           echo "current=${CUR}" >> "$GITHUB_OUTPUT"
-          echo "Score de mutation (courant) : ${CUR}"
+          echo "Score de mutation : ${CUR}"
 
-      - name: Read previous mutation score (from cache)
+      - name: Read previous mutation score
         id: score_prev
         shell: bash
         run: |
-          set -euo pipefail
           PREV="0"
           if [[ -f "${{ env.PIT_SCORE_FILE }}" ]]; then
             PREV=$(cat "${{ env.PIT_SCORE_FILE }}" | tr -d '\r\n' || echo "0")
           fi
           echo "prev=${PREV}" >> "$GITHUB_OUTPUT"
-          echo "Score de mutation (précédent) : ${PREV}"
 
       - name: Fail if mutation score decreased
         shell: bash
         run: |
-          set -euo pipefail
           CUR="${{ steps.score_current.outputs.current }}"
           PREV="${{ steps.score_prev.outputs.prev }}"
 
-          echo "Score précédent : ${PREV}"
-          echo "Score courant   : ${CUR}"
-
-          # Compare en flottant via bc (ex: 68.75 vs 68.5)
           cmp=$(awk -v a="$CUR" -v b="$PREV" 'BEGIN { if (a < b) print "lt"; else print "ge" }')
           if [[ "$cmp" == "lt" ]]; then
             echo "::error::Le score de mutation a diminué (${CUR} < ${PREV})."
@@ -118,15 +107,18 @@ jobs:
 
           echo "OK : score de mutation stable ou en hausse."
 
-      - name: Store current score (for next run)
+      # HUMOUR: Rickroll si un test échoue 
+      - name: Rickroll on failure
+        if: failure()
+        uses: gautamkrishnar/random-rickroll@v1.1
+
+      - name: Store current score
         if: always()
         shell: bash
         run: |
           mkdir -p "${{ env.PIT_CACHE_DIR }}"
           echo "${{ steps.score_current.outputs.current }}" > "${{ env.PIT_SCORE_FILE }}"
-          echo "Score stocké dans ${{ env.PIT_SCORE_FILE }}"
 
-      # Sauvegarde le nouveau score dans un NOUVEAU cache (clé unique) pour qu'il soit disponible au prochain run
       - name: Save updated score cache
         if: always()
         uses: actions/cache/save@v4
