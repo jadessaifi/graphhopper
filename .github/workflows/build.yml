@@ -107,21 +107,12 @@ jobs:
 
           echo "OK : score de mutation stable ou en hausse."
 
-      # HUMOUR: Rickroll si un test échoue 
+            # HUMOUR : Rickroll si un test échoue
       - name: Rickroll on failure
         if: failure()
-        uses: gautamkrishnar/rickroll@v1.0.2
+        run: 
+          echo "Never gonna give you up ♪"
+          echo "Never gonna let you down ♫"
+          echo "Voici ton Rickroll : https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-      - name: Store current score
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p "${{ env.PIT_CACHE_DIR }}"
-          echo "${{ steps.score_current.outputs.current }}" > "${{ env.PIT_SCORE_FILE }}"
 
-      - name: Save updated score cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.PIT_CACHE_DIR }}
-          key: ${{ env.PIT_CACHE_PREFIX }}${{ github.run_id }}
