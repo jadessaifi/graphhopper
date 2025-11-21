@@ -104,7 +104,7 @@ public class GHSortedCollectionTest {
         }
     }
 
-    // ========== NOUVEAUX TESTS MOCKITO (≥2 classes simulées) ==========
+    // ========== NOUVEAUX TESTS MOCKITO ==========
 
     /**
      * Mock de GHIntHashSet + Iterator<IntCursor> :

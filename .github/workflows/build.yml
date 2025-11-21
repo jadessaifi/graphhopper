@@ -1,5 +1,6 @@
 name: Build and Test
 on: push
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,3 +38,98 @@ jobs:
       - name: Build ${{ matrix.java-version }}
         run: mvn -B clean test
 
+  mutation:
+    name: PIT Mutation Score (fail if decreased)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      # Utiliser une JDK stable pour PIT
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+
+      - name: Cache Maven artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      # Lancer PIT uniquement sur le module core, paquet coll (tu peux élargir si tu veux)
+      - name: Run PIT
+        working-directory: core
+        run: |
+          mvn -B org.pitest:pitest-maven:1.16.0:mutationCoverage \
+            -DtargetClasses=com.graphhopper.coll.* \
+            -DtargetTests=com.graphhopper.coll.* \
+            -Dthreads=4 \
+            -Dmutators=STRONGER
+
+      # Calculer le score à partir de mutations.xml
+      - name: Compute mutation score
+        id: score
+        working-directory: core
+        shell: bash
+        run: |
+          set -e
+          REPORT_DIR=$(ls -d target/pit-reports/* | sort | tail -n1)
+          XML="$REPORT_DIR/mutations.xml"
+          if [[ ! -f "$XML" ]]; then
+            echo "mutations.xml not found at $XML"
+            exit 1
+          fi
+          TOTAL=$(grep -c '<mutation ' "$XML" || true)
+          KILLED=$(grep -c 'detected="true"' "$XML" || true)
+          if [[ "$TOTAL" -eq 0 ]]; then
+            echo "No mutations found, score=0"
+            SCORE=0
+          else
+            # score entier en %
+            SCORE=$(( 100 * KILLED / TOTAL ))
+          fi
+          echo "Current mutation score: ${SCORE}% (killed=$KILLED / total=$TOTAL)"
+          echo "${SCORE}" > pit-score.txt
+          echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
+
+      # Télécharger le score précédent (artifact du dernier run réussi sur la même branche)
+      - name: Download previous score artifact
+        id: prev
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: Build and Test
+          workflow_conclusion: success
+          branch: ${{ github.ref_name }}
+          name: pit-score-core
+          path: previous
+          if_no_artifact_found: ignore
+
+      # Comparer - échouer si le score a baissé
+      - name: Compare with previous score
+        if: always()
+        shell: bash
+        run: |
+          set -e
+          CUR=$(cat core/pit-score.txt)
+          echo "Current score: ${CUR}%"
+          if [[ -f previous/pit-score.txt ]]; then
+            PREV=$(cat previous/pit-score.txt)
+            echo "Previous score: ${PREV}%"
+            if (( CUR < PREV )); then
+              echo "::error ::Mutation score decreased: ${CUR}% < ${PREV}%"
+              exit 1
+            fi
+          else
+            echo "No previous score artifact found (first run on this branch?)"
+          fi
+
+      # Publier le score courant pour le prochain run
+      - name: Upload current score artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-score-core
+          path: core/pit-score.txt
+          if-no-files-found: error
