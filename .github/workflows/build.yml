@@ -12,8 +12,8 @@ jobs:
     env:
       MODULE: core
       JAVA_VERSION: 21
-      PIT_TARGET_CLASSES: com.graphhopper.coll.*
-      PIT_TARGET_TESTS: com.graphhopper.coll.*
+      PIT_TARGET_CLASSES: com.graphhopper.*
+      PIT_TARGET_TESTS: com.graphhopper.*
 
       PIT_CACHE_DIR: .pit-cache
       PIT_SCORE_FILE: .pit-cache/mutation_score.txt
