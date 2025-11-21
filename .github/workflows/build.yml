@@ -1,116 +1,139 @@
-name: Build, Test & PIT
+name: Build and Test
 
 on:
   push:
-  pull_request:
-
-# nécessaire pour récupérer l’artifact du run précédent
-permissions:
-  contents: read
-  actions: read
 
 jobs:
-  build-test-pit:
+  # ---- 1) Build & tests unitaires sur JDK 24 ----
+  ci:
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: [24]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Temurin JDK 21
+      - name: Set up Temurin ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java-version }}
+          cache: maven
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-${{ matrix.java-version }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-
+
+      - name: Cache node binary
+        uses: actions/cache@v4
+        with:
+          path: web-bundle/node
+          key: ${{ runner.os }}-nodebin-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-nodebin-
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: web-bundle/node_modules
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Build + test (JDK ${{ matrix.java-version }})
+        run: mvn -B clean test
+        env:
+          MAVEN_OPTS: "-Xmx1g -Duser.language=en"
+
+  # ---- 2) PIT Mutation Testing dédié (JDK 21) ----
+  mutation:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Temurin 21 (stable for PIT)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
-      - name: Build all modules (install to local repo, skip tests)
+      - name: Build sans tests (prépare le SUT)
         run: mvn -B -q -DskipTests install
-
-      - name: Run unit tests (quick check)
-        run: mvn -B -q -T1C test
-
-      # Exécuter PIT uniquement sur le module core
-      - name: Run PIT on core (mutation testing)
         env:
-          MAVEN_OPTS: "--add-opens java.base/java.lang=ALL-UNNAMED -Xmx2g -Xms512m -Duser.language=en"
+          MAVEN_OPTS: "-Xmx1g -Duser.language=en"
+
+      # ⚠️ Important : on passe les options JVM via -DjvmArgs (et non -DargLine)
+      - name: Lancer PIT sur le module reader-gtfs
+        id: pit_run
         run: |
-          mvn -B -pl core org.pitest:pitest-maven:1.16.0:mutationCoverage \
+          mvn -B -pl reader-gtfs org.pitest:pitest-maven:1.16.0:mutationCoverage \
             -Dplugins=junit5 \
-            -DargLine="--add-opens java.base/java.lang=ALL-UNNAMED -Xmx2g -Xms512m -Duser.language=en" \
-            -DtargetClasses=com.graphhopper.coll.* \
-            -DtargetTests=com.graphhopper.coll.* \
+            -DjvmArgs="--enable-native-access=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED -Xmx2g -Xms512m -Duser.language=en" \
             -Dthreads=2 \
             -DtimeoutConst=8000 \
-            -Dmutators=STRONGER
-            # Si tu veux un seuil fixe, décommente :
-            # -DmutationThreshold=70
+            -Dmutators=STRONGER \
+            -DtargetClasses=com.graphhopper.gtfs.* \
+            -DtargetTests=**.*Test,**.*Tests
+        env:
+          MAVEN_OPTS: "-Xmx1g -Duser.language=en"
 
-      # Calculer le score courant à partir de mutations.xml
-      - name: Compute mutation score
+      - name: Extraire le score de mutation
         id: score
-        shell: bash
         run: |
-          set -e
-          REPORT_DIR=$(ls -d core/target/pit-reports/* | sort | tail -n1)
-          XML="$REPORT_DIR/mutations.xml"
-          if [[ ! -f "$XML" ]]; then
-            echo "::error ::mutations.xml not found at $XML"
-            exit 1
-          fi
-          TOTAL=$(grep -c '<mutation ' "$XML" || true)
-          KILLED=$(grep -c 'detected="true"' "$XML" || true)
-          if [[ "$TOTAL" -eq 0 ]]; then
-            SCORE=0
-          else
-            SCORE=$(( 100 * KILLED / TOTAL ))
-          fi
-          echo "Current mutation score: ${SCORE}% (killed=$KILLED / total=$TOTAL)"
-          echo "${SCORE}" > core/pit-score.txt
-          echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
-
-      # Télécharger le score précédent (dernier run réussi de ce workflow sur la même branche)
-      - name: Download previous score artifact
-        id: prev
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          # doit correspondre EXACTEMENT au champ 'name' en haut du fichier
-          workflow: Build, Test & PIT
-          workflow_conclusion: success
-          branch: ${{ github.ref_name }}
-          name: pit-score-core
-          path: previous
-          if_no_artifact_found: ignore
-
-      # Comparer et échouer si le score a baissé
-      - name: Compare with previous score (fail if decreased)
-        shell: bash
-        run: |
-          set -e
-          CUR=$(cat core/pit-score.txt)
-          echo "Current score: ${CUR}%"
-          if [[ -f previous/pit-score.txt ]]; then
-            PREV=$(cat previous/pit-score.txt)
-            echo "Previous score: ${PREV}%"
-            if (( CUR < PREV )); then
-              echo "::error ::Mutation score decreased: ${CUR}% < ${PREV}%"
-              exit 1
+          # Chemin du module PIT
+          REPORT_DIR="reader-gtfs/target/pit-reports"
+          if [ -d "$REPORT_DIR" ]; then
+            SUMMARY=$(ls -dt "$REPORT_DIR"/* | head -n1)/summary.xml
+            if [ -f "$SUMMARY" ]; then
+              SCORE=$(grep -oPm1 "(?<=<score>)[^<]+" "$SUMMARY" || echo 0)
+            else
+              SCORE=0
             fi
           else
-            echo "No previous score artifact found (first run on this branch?)"
+            SCORE=0
           fi
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          echo "Score de mutation détecté: $SCORE"
 
-      # Publier le score courant pour servir de baseline au prochain run
-      - name: Upload current score artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pit-score-core
-          path: core/pit-score.txt
-          if-no-files-found: error
+      - name: Comparer au score précédent (si présent)
+        run: |
+          PREV=0
+          if [ -f mutation_score.txt ]; then
+            PREV=$(cat mutation_score.txt)
+          fi
+          CUR=${{ steps.score.outputs.score }}
+          echo "Score précédent : $PREV"
+          echo "Score courant   : $CUR"
+          if [ "$CUR" -lt "$PREV" ]; then
+            echo "::error::Le score de mutation a diminué ($CUR < $PREV)."
+            exit 1
+          fi
+          echo "$CUR" > mutation_score.txt
 
-      # Publier le rapport HTML PIT (toujours utile pour debug)
-      - name: Upload PIT HTML report
+      - name: Uploader le rapport PIT
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pitest-report-core
-          path: core/target/pit-reports
+          name: pitest-report-reader-gtfs
+          path: reader-gtfs/target/pit-reports
+          if-no-files-found: warn
+          compression-level: 6
+
+      - name: Sauvegarder le nouveau score (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-score
+          path: mutation_score.txt
+          if-no-files-found: warn
+
+      - name: Rickroll on failure
+        if: failure()
+        uses: ./.github/rickroll

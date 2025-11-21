@@ -1,0 +1,9 @@
+name: "Random Rickroll"
+runs:
+  using: "composite"
+  steps:
+    - name: Rickroll
+      shell: bash
+      run: |
+        echo "Never gonna give you up !!!!!!"
+        echo "https://www.youtube.com/watch?v=7tc4vVc8c50"
