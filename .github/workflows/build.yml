@@ -1,7 +1,7 @@
 name: Build and Test
 on: push
 
-# permissions pour télécharger l’artifact du run précédent
+# néc. pour télécharger l’artifact du run précédent
 permissions:
   contents: read
   actions: read
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # JDK LTS pour PIT
+      # JDK LTS stable pour PIT
       - uses: actions/setup-java@v4
         with:
           java-version: 21
@@ -64,24 +64,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      # Construire le reactor pour résoudre les dépendances de core (ex: web-api)
+      # Construire le reactor pour résoudre les dépendances (ex: web-api) avant PIT
       - name: Build reactor (install deps, skip tests)
         run: mvn -B -pl core -am -DskipTests install
 
-      # Exécuter PIT sur le module core avec flags anti MINION_DIED
+      # Exécuter PIT sur core avec flags anti MINION_DIED
       - name: Run PIT on core
         run: |
           mvn -B -pl core org.pitest:pitest-maven:1.16.0:mutationCoverage \
             -Dplugins=junit5 \
-            -Dfeatures=+classpathfile \
-            -DjvmArgs="-Xmx2g --add-opens java.base/java.lang=ALL-UNNAMED" \
+            -Dfeatures=+classPathFile \
+            -DargLine="--add-opens java.base/java.lang=ALL-UNNAMED -Xmx2g -Xms512m -Duser.language=en" \
             -DtargetClasses=com.graphhopper.coll.* \
             -DtargetTests=com.graphhopper.coll.* \
             -Dthreads=2 \
             -DtimeoutConst=8000 \
             -Dmutators=STRONGER
 
-      # Calculer le score courant à partir de mutations.xml
+      # Calculer le score courant
       - name: Compute mutation score
         id: score
         shell: bash
@@ -104,7 +104,7 @@ jobs:
           echo "${SCORE}" > core/pit-score.txt
           echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
 
-      # Télécharger le score précédent (dernier run réussi de ce workflow sur la même branche)
+      # Télécharger le score précédent (dernier run réussi même workflow/branche)
       - name: Download previous score artifact
         id: prev
         uses: dawidd6/action-download-artifact@v6
@@ -134,7 +134,7 @@ jobs:
             echo "No previous score artifact found (first run on this branch?)"
           fi
 
-      # (Optionnel) Seuil minimal fixe à respecter
+      # (Optionnel) Seuil minimal fixe
       # - name: Enforce minimum score
       #   shell: bash
       #   run: |
@@ -145,7 +145,7 @@ jobs:
       #       exit 1
       #     fi
 
-      # Publier le score courant pour le prochain run
+      # Publier le score pour comparaison au prochain run
       - name: Upload current score artifact
         uses: actions/upload-artifact@v4
         with:
