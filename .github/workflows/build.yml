@@ -110,7 +110,7 @@ jobs:
       # HUMOUR: Rickroll si un test échoue 
       - name: Rickroll on failure
         if: failure()
-        uses: gautamkrishnar/random-rickroll@v1.0.2
+        uses: gautamkrishnar/rickroll@v1.0.2
 
       - name: Store current score
         if: always()
