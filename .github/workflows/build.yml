@@ -1,7 +1,7 @@
 name: Build and Test
 on: push
 
-# nécessaires pour télécharger l'artifact du run précédent
+# permissions pour télécharger l’artifact du run précédent
 permissions:
   contents: read
   actions: read
@@ -68,13 +68,17 @@ jobs:
       - name: Build reactor (install deps, skip tests)
         run: mvn -B -pl core -am -DskipTests install
 
-      # Exécuter PIT sur le module core
+      # Exécuter PIT sur le module core avec flags anti MINION_DIED
       - name: Run PIT on core
         run: |
           mvn -B -pl core org.pitest:pitest-maven:1.16.0:mutationCoverage \
+            -Dplugins=junit5 \
+            -Dfeatures=+classpathfile \
+            -DjvmArgs="-Xmx2g --add-opens java.base/java.lang=ALL-UNNAMED" \
             -DtargetClasses=com.graphhopper.coll.* \
             -DtargetTests=com.graphhopper.coll.* \
-            -Dthreads=4 \
+            -Dthreads=2 \
+            -DtimeoutConst=8000 \
             -Dmutators=STRONGER
 
       # Calculer le score courant à partir de mutations.xml
